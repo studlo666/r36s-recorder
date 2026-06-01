@@ -2,67 +2,61 @@
 
 # --- CONFIGURATION ---
 TOOLS_DIR="/roms/tools"
-SHM_DIR="/dev/shm/recorder_assets"
+ICONS="/roms/icons"
 VIDEO_DIR="/roms/videos"
-RECORDER_PATH="$TOOLS_DIR/recorder.sh"
 LOG_FILE="$VIDEO_DIR/log.txt"
+RECORDER_PATH="$TOOLS_DIR/recorder.sh"
 FFMPEG="/usr/bin/ffmpeg"
 
-echo "[*] Installing Pro-Grade Toggle Recorder..."
+echo "[*] Installing Pro-Grade R36S Recorder..."
 
-# 1. Setup Directories & Permissions
-sudo mkdir -p "$TOOLS_DIR" "$SHM_DIR" "$VIDEO_DIR"
+# 1. Setup Environment
+sudo mkdir -p "$TOOLS_DIR" "$ICONS" "$VIDEO_DIR"
 sudo touch "$LOG_FILE"
 sudo chmod 666 "$LOG_FILE"
 
-# 2. Generate Red Dot Asset
-sudo $FFMPEG -f lavfi -i color=c=red:s=20x20 -frames:v 1 "$SHM_DIR/dot.png" -y >/dev/null 2>&1
-
-# 3. Create the Smart Recorder Script (Split-Stream Logic)
+# 2. Create the Smart Recorder Script
 cat << 'EOF' | sudo tee "$RECORDER_PATH" > /dev/null
 #!/bin/bash
 PID_FILE="/tmp/ffmpeg_recorder.pid"
 LOG_FILE="/roms/videos/log.txt"
-DOT="/dev/shm/recorder_assets/dot.png"
-FFMPEG="/usr/bin/ffmpeg"
+ICONS="/roms/icons"
+# State variables: 0=idle, 1=pressed
+A_S=0; B_S=0; X_S=0; Y_S=0; FN_S=0
 
 toggle() {
     if [ ! -f "$PID_FILE" ]; then
-        # --- START: Split Stream (Dot on Screen / Clean to File) ---
-        # 1. Take raw input from /dev/fb0
-        # 2. Overlay dot and send to screen
-        # 3. Save clean copy to file
+        # Capture screen (fb0) + Audio (hw:0,0) with dynamic button overlay
+        # 640x940 Canvas: Screen at top (0,0), Buttons in bottom area
         nohup $FFMPEG -y -f fbdev -r 30 -i /dev/fb0 \
-          -i "$DOT" \
-          -filter_complex "[0:v][1:v]overlay=10:10:format=auto[dot];[dot]split[scr][vid];[scr]format=bgra[scr_out]" \
-          -map "[scr_out]" -f fbdev /dev/fb0 \
-          -map "[vid]" -c:v libx264 -preset ultrafast -crf 28 \
+          -f alsa -i hw:0,0 \
+          -i "$ICONS/defaulta.png" -i "$ICONS/selecta.png" \
+          -i "$ICONS/defaultb.png" -i "$ICONS/selectb.png" \
+          -i "$ICONS/defaultx.png" -i "$ICONS/selectx.png" \
+          -i "$ICONS/defaulty.png" -i "$ICONS/selecty.png" \
+          -i "$ICONS/defaultfn.png" -i "$ICONS/selectfn.png" \
+          -filter_complex "[0:v]pad=640:940:0:0:black[base]; \
+          [base][2:v]overlay=500:600:enable='eq(A_S,0)'[v1]; [v1][3:v]overlay=500:600:enable='eq(A_S,1)'[v2]; \
+          [v2][4:v]overlay=500:670:enable='eq(B_S,0)'[v3]; [v3][5:v]overlay=500:670:enable='eq(B_S,1)'[v4]; \
+          [v4][6:v]overlay=430:600:enable='eq(X_S,0)'[v5]; [v5][7:v]overlay=430:600:enable='eq(X_S,1)'[v6]; \
+          [v6][8:v]overlay=430:670:enable='eq(Y_S,0)'[v7]; [v7][9:v]overlay=430:670:enable='eq(Y_S,1)'[v8]; \
+          [v8][10:v]overlay=250:750:enable='eq(FN_S,0)'[v9]; [v9][11:v]overlay=250:750:enable='eq(FN_S,1)'[outv]" \
+          -map "[outv]" -map 1:a -c:v libx264 -preset ultrafast -crf 28 -c:a aac \
           "/roms/videos/capture_$(date +%Y%m%d_%H%M%S).mp4" >> "$LOG_FILE" 2>&1 &
-        
         echo $! > "$PID_FILE"
-        echo "[$(date)] Recording Started." >> "$LOG_FILE"
     else
         kill $(cat "$PID_FILE")
         rm "$PID_FILE"
-        echo "[$(date)] Recording Stopped." >> "$LOG_FILE"
     fi
 }
 
-# Controller Listener (FN+Start = 01 08 01)
-if [ "$1" == "toggle" ]; then
-    toggle
-else
-    hexdump -v -e '1/1 "%02x " "\n"' /dev/input/js0 2>/dev/null | while read -r line; do
-        if [[ "$line" == *"01 08 01"* ]]; then
-            $0 toggle
-            sleep 2
-        fi
-    done
-fi
+# Simple Listener Logic
+hexdump -v -e '1/1 "%02x " "\n"' /dev/input/js0 2>/dev/null | while read -r line; do
+    [[ "$line" == *"01 08 01"* ]] && toggle
+done
 EOF
 
-# 4. Finalize
+# 3. Finalize
 sudo chmod +x "$RECORDER_PATH"
-# Run the listener as a background process
-setsid "$RECORDER_PATH" >/dev/null 2>&1 &
-echo "[✓] Installation complete! Recording toggles with FN+Start."
+echo "[✓] Installation complete."
+echo "[✓] Ensure all button icons are in /roms/icons/ (e.g., defaulta.png, selecta.png)."
