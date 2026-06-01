@@ -4,31 +4,27 @@
 TOOLS_DIR="/roms/tools"
 ICONS="/roms/icons"
 VIDEO_DIR="/roms/videos"
-LOG_FILE="$VIDEO_DIR/log.txt"
 RECORDER_PATH="$TOOLS_DIR/recorder.sh"
-FFMPEG="/usr/bin/ffmpeg"
 
-echo "[*] Installing Pro-Grade R36S Video Recorder..."
+echo "[*] Deploying stable recording environment..."
 
-# 1. Setup Environment
+# 1. Create directories and set permissions
 sudo mkdir -p "$TOOLS_DIR" "$ICONS" "$VIDEO_DIR"
-sudo touch "$LOG_FILE"
-sudo chmod 666 "$LOG_FILE"
+sudo chmod 777 "$TOOLS_DIR" "$ICONS" "$VIDEO_DIR"
 
-# 2. Create the Stable Recorder Script
+# 2. Deploy the stable recorder script
 cat << 'EOF' | sudo tee "$RECORDER_PATH" > /dev/null
 #!/bin/bash
 PID_FILE="/tmp/ffmpeg_recorder.pid"
 LOG_FILE="/roms/videos/log.txt"
 ICONS="/roms/icons"
-# Initial State variables
+FFMPEG="/usr/bin/ffmpeg"
 A_S=0; B_S=0; X_S=0; Y_S=0; FN_S=0
 
 toggle() {
     if [ ! -f "$PID_FILE" ]; then
-        # Video-only capture, 640x940 canvas
-        # Audio removed to eliminate hang issues
-        nohup $FFMPEG -y -f fbdev -r 30 -i /dev/fb0 \
+        # Recording with verified stable configuration
+        nohup $FFMPEG -y -f fbdev -framerate 30 -video_size 640x480 -i /dev/fb0 \
           -i "$ICONS/defaulta.png" -i "$ICONS/selecta.png" \
           -i "$ICONS/defaultb.png" -i "$ICONS/selectb.png" \
           -i "$ICONS/defaultx.png" -i "$ICONS/selectx.png" \
@@ -49,14 +45,14 @@ toggle() {
     fi
 }
 
-# Controller Listener
 hexdump -v -e '1/1 "%02x " "\n"' /dev/input/js0 2>/dev/null | while read -r line; do
     [[ "$line" == *"01 08 01"* ]] && toggle
 done
 EOF
 
-# 3. Finalize
+# 3. Apply permissions and start the service
 sudo chmod +x "$RECORDER_PATH"
-# Run the listener
 setsid "$RECORDER_PATH" >/dev/null 2>&1 &
-echo "[✓] Installation complete."
+
+echo "[✓] Installation complete!"
+echo "[✓] Controller listener active. Toggle recording with FN+Start."
